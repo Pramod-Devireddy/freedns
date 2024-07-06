@@ -2,79 +2,113 @@ package main
 
 import (
 	"fmt"
-	"net/http"
-	"strings"
-	"time"
+	"log"
+	"sort"
+	"sync"
+	"unicode"
 
-	"golang.org/x/net/html"
+	"github.com/gocolly/colly/v2"
 )
 
-const baseURL = "https://freedns.afraid.org/domain/registry/page-"
-
 func main() {
-	// domains := []string{}
+	// Instantiate default collector
+	c := colly.NewCollector(
+		colly.AllowedDomains("freedns.afraid.org"),
+		colly.Async(true), // Enable asynchronous requests
+	)
 
-	for i := 1; i <= 270; i++ {
-		url := fmt.Sprintf("%s%d.html", baseURL, i)
+	// Set custom headers
+	c.OnRequest(func(r *colly.Request) {
+		r.Headers.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+		r.Headers.Set("Accept-Encoding", "gzip, deflate, br, zstd")
+		r.Headers.Set("Accept-Language", "en-US,en;q=0.9")
+		r.Headers.Set("Cache-Control", "no-cache")
+		r.Headers.Set("Connection", "keep-alive")
+		r.Headers.Set("Host", "freedns.afraid.org")
+		r.Headers.Set("Pragma", "no-cache")
+		r.Headers.Set("Sec-Ch-Ua", `"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"`)
+		r.Headers.Set("Sec-Ch-Ua-Mobile", "?0")
+		r.Headers.Set("Sec-Ch-Ua-Platform", `"Windows"`)
+		r.Headers.Set("Sec-Fetch-Dest", "document")
+		r.Headers.Set("Sec-Fetch-Mode", "navigate")
+		r.Headers.Set("Sec-Fetch-Site", "none")
+		r.Headers.Set("Sec-Fetch-User", "?1")
+		r.Headers.Set("Upgrade-Insecure-Requests", "1")
+		r.Headers.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+	})
 
-		pageDomains, err := fetchDomains(url)
-		if err != nil {
-			fmt.Println(err)
-		}
+	// Slice to store domains
+	var subdomains []string
+	var subdomainsMutex sync.Mutex // Mutex to protect the slice
 
-		fmt.Printf("****** Page-%d ********\n", i)
-
-		for _, domain := range pageDomains {
-			fmt.Println(domain)
-		}
-
-		fmt.Println()
-
-		time.Sleep(1 * time.Second)
-		// domains = append(domains, pageDomains...)
-	}
-
-}
-
-func fetchDomains(url string) ([]string, error) {
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP request returned status %d", resp.StatusCode)
-	}
-
-	doc, err := html.Parse(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("HTML parsing failed: %v", err)
-	}
-
-	var pageDomains []string
-
-	// Recursive function to traverse the HTML nodes and extract domain names
-	// based on the specific structure (assuming domain links contain the word "subdomain")
-
-	var f func(*html.Node)
-
-	f = func(n *html.Node) {
-		if n.Type == html.ElementNode && n.Data == "a" {
-			for _, attr := range n.Attr {
-				if attr.Key == "href" && strings.Contains(attr.Val, "/subdomain/edit") {
-					pageDomains = append(pageDomains, n.FirstChild.Data)
-					break
-				}
+	// On every <tr> element
+	c.OnHTML("tr", func(e *colly.HTMLElement) {
+		// Check if the second column contains "public"
+		if e.ChildText("td:nth-child(2)") == "public" {
+			// Extract subdomain from the first column
+			subdomain := e.ChildText("td:nth-child(1) a[href*='/subdomain/edit.php']")
+			if subdomain != "" {
+				subdomainsMutex.Lock()
+				subdomains = append(subdomains, subdomain)
+				subdomainsMutex.Unlock()
 			}
 		}
+	})
 
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			f(c)
-		}
+	// Error handling
+	c.OnError(func(r *colly.Response, err error) {
+		log.Printf("Request URL: %v failed with response: %v. Error: %v", r.Request.URL, r, err)
+	})
+
+	// Use WaitGroup to wait for all goroutines to finish
+	var wg sync.WaitGroup
+
+	// Start scraping from page 1 to 270
+	for i := 1; i <= 270; i++ {
+		wg.Add(1)
+		go func(page int) {
+			defer wg.Done()
+			url := fmt.Sprintf("https://freedns.afraid.org/domain/registry/page-%d.html", page)
+			err := c.Visit(url)
+			if err != nil {
+				log.Fatalf("Failed to visit %s: %v", url, err)
+			}
+		}(i)
 	}
 
-	f(doc)
+	// Wait for all requests to finish
+	wg.Wait()
 
-	return pageDomains, nil
+	// Wait for scraping to finish
+	c.Wait()
+
+	// Sort subdomains by length first, then alphabetically, and put domains with numbers at the end
+	sort.Slice(subdomains, func(i, j int) bool {
+		if len(subdomains[i]) != len(subdomains[j]) {
+			return len(subdomains[i]) < len(subdomains[j])
+		}
+		containsNumberI := containsNumber(subdomains[i])
+		containsNumberJ := containsNumber(subdomains[j])
+		if containsNumberI != containsNumberJ {
+			return !containsNumberI
+		}
+		return subdomains[i] < subdomains[j]
+	})
+
+	// Print all domains
+	fmt.Println("Total domains found:", len(subdomains))
+	count := 1
+	for _, subdomain := range subdomains {
+		fmt.Println("|", count, "|", subdomain, "|")
+		count++
+	}
+}
+
+func containsNumber(s string) bool {
+	for _, c := range s {
+		if unicode.IsDigit(c) {
+			return true
+		}
+	}
+	return false
 }
