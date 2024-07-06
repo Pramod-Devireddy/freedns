@@ -29,7 +29,7 @@ This repository contains the details of various public domains available through
 
 ### Contributing
 
-We welcome contributions! If you'd like to add new domains or update existing ones, please follow these steps:
+Contributions are welcomed! If you'd like to add new domains or update existing ones, please follow these steps:
 
 1. **Fork the Repository**: Create a fork of the repository on GitHub.
 2. **Create a Branch**: Create a new branch for your changes.
