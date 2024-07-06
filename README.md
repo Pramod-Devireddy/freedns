@@ -8,7 +8,7 @@ Welcome to the Free Public Domain Registry! This project provides a comprehensiv
 
 ### Overview
 
-This repository contains the details of various public domains available through FreeDNS. Whether you're looking for a subdomain for personal projects or professional purposes, you can find a suitable option here.
+This repository contains the details of various public domains available through [FreeDNS website](https://freedns.afraid.org/). Whether you're looking for a subdomain for personal projects or professional purposes, you can find a suitable option here.
 
 ### Total Domains Available: 5465
 
